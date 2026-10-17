@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TeleportDelivery.Core/TeleportDelivery.Core.csproj" />
+  </Folder>
+</Solution>
