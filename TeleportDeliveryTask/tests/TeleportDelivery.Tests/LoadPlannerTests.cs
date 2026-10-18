@@ -103,6 +103,7 @@ public class LoadPlannerTests
         var loaded = Enumerable.Range(0, packages.Length).Where(i => plan.TruckOfPackage[i] != LoadPlan.NotLoaded).ToArray();
         Assert.Equal(loaded.Length, plan.LoadedCount);
         Assert.Equal(loaded.Sum(i => packages[i].Profit), plan.TotalProfit, precision: 3);
+        Assert.True(plan.TotalProfit <= plan.UpperBound, $"profit {plan.TotalProfit:N0} above the bound {plan.UpperBound:N0}");
     }
     
     [Theory]

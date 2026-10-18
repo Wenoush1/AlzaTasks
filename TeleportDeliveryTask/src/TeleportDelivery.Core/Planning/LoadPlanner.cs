@@ -1,11 +1,13 @@
 using TeleportDelivery.Model;
+using TeleportDelivery.Pricing;
 
 namespace TeleportDelivery.Planning;
 
 /// <summary>
 /// Plans one trip of the fleet: which packages go and in which truck. A greedy heuristic: packages are
 /// ranked by profit per share of fleet capacity they take and loaded in that order.
-/// Packages that fit nowhere are skipped; smaller ones later fill the gaps.
+/// Packages that fit nowhere are skipped; smaller ones later fill the gaps. The plan also carries an upper
+/// bound on the profit of any plan (<see cref="CapacityPricing"/>), so its quality can be judged.
 /// </summary>
 public sealed class LoadPlanner(Fleet fleet)
 {
@@ -24,7 +26,8 @@ public sealed class LoadPlanner(Fleet fleet)
         Array.Fill(truckOf, LoadPlan.NotLoaded);
         FillTrucks(packages, order, trucks, truckOf);
 
-        return new LoadPlan { TruckOfPackage = truckOf, Trucks = trucks };
+        var prices = CapacityPricing.Solve(packages, fleet.TotalWeightKg, fleet.TotalVolumeM3);
+        return new LoadPlan { TruckOfPackage = truckOf, Trucks = trucks, UpperBound = prices.UpperBound };
     }
 
     /// <summary>
