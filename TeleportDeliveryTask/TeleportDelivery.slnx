@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/TeleportDelivery.Benchmarks/TeleportDelivery.Benchmarks.csproj" />
     <Project Path="src/TeleportDelivery.Core/TeleportDelivery.Core.csproj" />
   </Folder>
   <Folder Name="/tests/">
