@@ -16,6 +16,7 @@ public class PlanningBenchmarks
     private readonly Fleet _fleet = Fleet.Default;
     private LoadPlanner _planner = null!;
     private Package[] _packages = null!;
+    private double[] _value = null!;
 
     [Params(ScenarioType.Typical, ScenarioType.Heavy, ScenarioType.Mixed)]
     public ScenarioType ScenarioType { get; set; }
@@ -28,11 +29,13 @@ public class PlanningBenchmarks
     {
         _planner = new LoadPlanner(_fleet);
         _packages = PackageGenerator.Generate(PackageCount, ScenarioType, seed: 1);
+        _value = Array.ConvertAll(_packages, p => WaitingPolicy.Default.Value(p));
     }
 
     [Benchmark]
     public LoadPlan Plan() => _planner.Plan(_packages);
 
     [Benchmark]
-    public CapacityPrices Pricing() => CapacityPricing.Solve(_packages, _fleet.TotalWeightKg, _fleet.TotalVolumeM3);
+    public CapacityPrices Pricing() =>
+        CapacityPricing.Solve(_packages, _value, _fleet.TotalWeightKg, _fleet.TotalVolumeM3);
 }

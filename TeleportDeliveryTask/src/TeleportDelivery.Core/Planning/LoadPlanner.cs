@@ -4,23 +4,28 @@ using TeleportDelivery.Pricing;
 namespace TeleportDelivery.Planning;
 
 /// <summary>
-/// Plans one trip of the fleet: which packages go and in which truck, so that the profit is maximal.
+/// Plans one trip of the fleet: which packages go and in which truck, so that the loaded value is maximal.
+/// A package's value is its profit plus the delay cost of making it wait another trip (<see cref="WaitingPolicy"/>).
 /// <list type="number">
-///   <item>Price the capacity: shadow prices of 1 kg and 1 m³ from the LP relaxation (<see cref="CapacityPricing"/>).</item>
-///   <item>Rank packages by efficiency = profit / capacity cost</item>
+///   <item>Overdue packages (waited as long as allowed) must go. The rest compete for the capacity left after them.</item>
+///   <item>Price that capacity: shadow prices of 1 kg and 1 m³ from the LP relaxation (<see cref="CapacityPricing"/>).</item>
+///   <item>Rank: overdue packages first, then by efficiency = value / capacity cost (CZK per CZK of capacity).</item>
 ///   <item>Load greedily in that order; each package goes to the truck in which weight and volume stay
 ///         the most balanced. Packages that fit nowhere are skipped; smaller ones later fill the gaps.</item>
 /// </list>
 /// </summary>
-public sealed class LoadPlanner(Fleet fleet)
+public sealed class LoadPlanner(Fleet fleet, WaitingPolicy? waitingPolicy = null)
 {
+    private readonly WaitingPolicy _waiting = waitingPolicy ?? WaitingPolicy.Default;
+
     private readonly double[] _perTruckWeight = [.. fleet.Trucks.Select(t => 1 / t.MaxWeightKg)];
     private readonly double[] _perTruckVolume = [.. fleet.Trucks.Select(t => 1 / t.MaxVolumeM3)];
 
     public LoadPlan Plan(Package[] packages)
     {
-        var prices = CapacityPricing.Solve(packages, fleet.TotalWeightKg, fleet.TotalVolumeM3);
-        var order = Rank(packages, prices);
+        var value = Array.ConvertAll(packages, p => _waiting.Value(p));
+        var (prices, upperBound) = PriceCapacity(packages, value);
+        var order = Rank(packages, value, prices);
 
         var trucks = new Truck[fleet.Trucks.Count];
         for (var t = 0; t < trucks.Length; t++)
@@ -30,11 +35,50 @@ public sealed class LoadPlanner(Fleet fleet)
         Array.Fill(truckOf, LoadPlan.NotLoaded);
         FillTrucks(packages, order, trucks, truckOf);
 
-        return new LoadPlan { TruckOfPackage = truckOf, Trucks = trucks, UpperBound = prices.UpperBound };
+        return new LoadPlan
+        {
+            TruckOfPackage = truckOf,
+            Trucks = trucks,
+            Value = Enumerable.Range(0, packages.Length).Where(IsLoaded).Sum(i => value[i]),
+            UpperBound = upperBound,
+            OverdueLeftBehind = Enumerable.Range(0, packages.Length).Count(i => !IsLoaded(i) && _waiting.IsOverdue(packages[i])),
+        };
+
+        bool IsLoaded(int i) => truckOf[i] != LoadPlan.NotLoaded;
     }
 
-    /// <summary>Package indices by efficiency, the best first.</summary>
-    private int[] Rank(Package[] packages, CapacityPrices prices)
+    /// <summary>
+    /// Shadow prices of the capacity the overdue packages leave free, and an upper bound on the value
+    /// of any plan that takes all overdue packages (their value + the LP bound for the rest).
+    /// </summary>
+    private (CapacityPrices Prices, double UpperBound) PriceCapacity(Package[] packages, double[] value)
+    {
+        var notOverdue = new List<int>(packages.Length);
+        double overdueWeight = 0, overdueVolume = 0, overdueValue = 0;
+        for (var i = 0; i < packages.Length; i++)
+        {
+            if (_waiting.IsOverdue(packages[i]))
+            {
+                overdueWeight += packages[i].WeightKg;
+                overdueVolume += packages[i].VolumeM3;
+                overdueValue += value[i];
+            }
+            else
+            {
+                notOverdue.Add(i);
+            }
+        }
+
+        var prices = CapacityPricing.Solve(
+            notOverdue.Select(i => packages[i]).ToArray(),
+            notOverdue.Select(i => value[i]).ToArray(),
+            fleet.TotalWeightKg - overdueWeight,
+            fleet.TotalVolumeM3 - overdueVolume);
+        return (prices, overdueValue + prices.UpperBound);
+    }
+
+    /// <summary>Overdue packages first (longest waiting first), then the rest by efficiency, best first.</summary>
+    private int[] Rank(Package[] packages, double[] value, CapacityPrices prices)
     {
         // On light days no capacity is scarce, so both prices are 0 and everything fits.
         // Then just value capacity by its share of the fleet, which still gives a sensible order.
@@ -46,10 +90,20 @@ public sealed class LoadPlanner(Fleet fleet)
         for (var i = 0; i < packages.Length; i++)
         {
             order[i] = i;
-            sortKey[i] = -packages[i].Profit / prices.CapacityCost(packages[i]);   // minus: descending order
+            sortKey[i] = -value[i] / prices.CapacityCost(packages[i]);   // minus: descending order
         }
         Array.Sort(sortKey, order);
-        return order;
+
+        // Move overdue packages to the front, the longest waiting first. OrderByDescending is a stable sort,
+        // so packages that waited equally long stay ordered by efficiency.
+        if (!order.Any(IsOverdue)) return order;
+        return
+        [
+            .. order.Where(IsOverdue).OrderByDescending(i => packages[i].WaitingTrips),
+            .. order.Where(i => !IsOverdue(i)),
+        ];
+
+        bool IsOverdue(int i) => _waiting.IsOverdue(packages[i]);
     }
 
     /// <summary>Loads packages in the given order; a package that fits in no truck stays in the warehouse.</summary>

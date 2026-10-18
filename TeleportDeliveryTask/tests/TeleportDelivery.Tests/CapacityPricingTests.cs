@@ -15,7 +15,7 @@ public class CapacityPricingTests
             new(Id: 1, WeightKg: 3, VolumeM3: 1, Profit: 30),
         ];
 
-        var prices = CapacityPricing.Solve(packages, weightCapacity: 10, volumeCapacity: 10);
+        var prices = CapacityPricing.Solve(packages, value: [60, 30], weightCapacity: 10, volumeCapacity: 10);
 
         Assert.Equal(0, prices.PerKg);
         Assert.Equal(0, prices.PerM3);
@@ -35,7 +35,7 @@ public class CapacityPricingTests
             new(Id: 1, WeightKg: 6, VolumeM3: 1, Profit: 30),
         ];
 
-        var prices = CapacityPricing.Solve(packages, weightCapacity: 10, volumeCapacity: 100);
+        var prices = CapacityPricing.Solve(packages, value: [60, 30], weightCapacity: 10, volumeCapacity: 100);
 
         Assert.Equal(5, prices.PerKg, precision: 6);
         Assert.Equal(0, prices.PerM3);

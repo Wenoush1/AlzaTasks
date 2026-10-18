@@ -8,13 +8,13 @@ namespace TeleportDelivery.Pricing;
 /// <code>
 ///   max Σ pᵢ·xᵢ   subject to   Σ wᵢ·xᵢ ≤ W,   Σ vᵢ·xᵢ ≤ V,   0 ≤ xᵢ ≤ 1
 /// </code>
-/// pᵢ is the profit of package i. It is solved through its Lagrangian dual, which for an LP has the
-/// same optimal value:
+/// pᵢ is what loading package i is worth (its profit plus the cost of making it wait longer).
+/// It is solved through its Lagrangian dual, which for an LP has the same optimal value:
 /// <code>
 ///   min over α, β ≥ 0 of   L(α, β) = α·W + β·V + Σ max(0, pᵢ − α·wᵢ − β·vᵢ)
 /// </code>
 /// α (CZK/kg) and β (CZK/m³) are the shadow prices. Any α, β ≥ 0 give a valid upper bound on
-/// the profit of every real plan; the minimising pair gives the tightest one.
+/// the value of every real plan; the minimising pair gives the tightest one.
 /// <para>
 /// For a fixed α the best β is the critical ratio of a 1-D fractional knapsack over volume,
 /// found by weighted quickselect in expected O(n). g(α) = min_β L(α, β) is convex, so a
@@ -30,11 +30,12 @@ public static class CapacityPricing
     private const double InvGoldenRatio = 0.6180339887498949;
 
     /// <param name="packages">Packages competing for the capacity.</param>
-    /// <param name="weightCapacity">Total weight capacity of the fleet (kg).</param>
-    /// <param name="volumeCapacity">Total volume capacity of the fleet (m³).</param>
-    public static CapacityPrices Solve(Package[] packages, double weightCapacity, double volumeCapacity)
+    /// <param name="value">What loading each package is worth (CZK); <c>value[i]</c> belongs to <c>packages[i]</c>.</param>
+    /// <param name="weightCapacity">Total free weight of the fleet (kg).</param>
+    /// <param name="volumeCapacity">Total free volume of the fleet (m³).</param>
+    public static CapacityPrices Solve(Package[] packages, double[] value, double weightCapacity, double volumeCapacity)
     {
-        var dual = new LagrangianDual(packages, Math.Max(0, weightCapacity), Math.Max(0, volumeCapacity));
+        var dual = new LagrangianDual(packages, value, Math.Max(0, weightCapacity), Math.Max(0, volumeCapacity));
 
         // Adding the volume limit can only make weight less scarce (volume competes for the same
         // packages), so the weight price with volume ignored bounds the search from above.
@@ -82,13 +83,17 @@ public static class CapacityPricing
     private readonly record struct Evaluation(double PerKg, double PerM3, double Bound);
 
     /// <summary>Evaluates the dual function on the packages whose fate is still open.</summary>
-    private sealed class LagrangianDual(Package[] packages, double weightCapacity, double volumeCapacity)
+    private sealed class LagrangianDual(
+        Package[] packages,
+        double[] value,
+        double weightCapacity,
+        double volumeCapacity)
     {
         private readonly Random _random = new(Seed: 2026);
 
         private readonly int[] _open = Enumerable.Range(0, packages.Length).ToArray();      // packages whose decision still depends on the prices
         private int _openCount = packages.Length;
-        private double _fixedProfit, _fixedWeight, _fixedVolume;   // sums over packages surely loaded
+        private double _fixedValue, _fixedWeight, _fixedVolume;   // sums over packages surely loaded
 
         private readonly Item[] _items = new Item[packages.Length];    // scratch buffer for the fractional knapsack
 
@@ -98,27 +103,27 @@ public static class CapacityPricing
         public double WeightPriceIgnoringVolume()
         {
             for (var i = 0; i < packages.Length; i++)
-                _items[i] = new Item(packages[i].Profit / packages[i].WeightKg, packages[i].WeightKg);
+                _items[i] = new Item(value[i] / packages[i].WeightKg, packages[i].WeightKg);
             return CriticalRatio(_items.AsSpan(), weightCapacity);
         }
 
         /// <summary>For a weight price α finds the best volume price β and the bound g(α) = L(α, β).</summary>
         public Evaluation Evaluate(double perKg)
         {
-            // What is left of each package's profit after paying for its weight, per m³.
+            // What is left of each package's value after paying for its weight, per m³.
             var count = 0;
             for (var k = 0; k < _openCount; k++)
             {
-                ref readonly Package p = ref packages[_open[k]];
-                double profitAfterWeight = p.Profit - perKg * p.WeightKg;
-                if (profitAfterWeight > 0)
-                    _items[count++] = new Item(profitAfterWeight / p.VolumeM3, p.VolumeM3);
+                var i = _open[k];
+                double valueAfterWeight = value[i] - perKg * packages[i].WeightKg;
+                if (valueAfterWeight > 0)
+                    _items[count++] = new Item(valueAfterWeight / packages[i].VolumeM3, packages[i].VolumeM3);
             }
             Span<Item> items = _items.AsSpan(0, count);
             double perM3 = CriticalRatio(items, Math.Max(0, volumeCapacity - _fixedVolume));
 
             double bound = perKg * weightCapacity + perM3 * volumeCapacity
-                         + _fixedProfit - perKg * _fixedWeight - perM3 * _fixedVolume;
+                         + _fixedValue - perKg * _fixedWeight - perM3 * _fixedVolume;
             foreach (Item item in items)
                 bound += Math.Max(0, (item.Ratio - perM3) * item.Size);   // = max(0, p − α·w − β·v)
 
@@ -137,10 +142,10 @@ public static class CapacityPricing
             {
                 var i = _open[k];
                 ref readonly Package p = ref packages[i];
-                if (p.Profit - lower.PerKg * p.WeightKg - upper.PerM3 * p.VolumeM3 <= 0) continue;   // never pays off
-                if (p.Profit - upper.PerKg * p.WeightKg - lower.PerM3 * p.VolumeM3 > 0)              // always pays off
+                if (value[i] - lower.PerKg * p.WeightKg - upper.PerM3 * p.VolumeM3 <= 0) continue;   // never pays off
+                if (value[i] - upper.PerKg * p.WeightKg - lower.PerM3 * p.VolumeM3 > 0)              // always pays off
                 {
-                    _fixedProfit += p.Profit;
+                    _fixedValue += value[i];
                     _fixedWeight += p.WeightKg;
                     _fixedVolume += p.VolumeM3;
                     continue;
@@ -154,8 +159,8 @@ public static class CapacityPricing
         public double ExactBound(double perKg, double perM3)
         {
             var bound = perKg * weightCapacity + perM3 * volumeCapacity;
-            foreach (ref readonly Package p in packages.AsSpan())
-                bound += Math.Max(0, p.Profit - perKg * p.WeightKg - perM3 * p.VolumeM3);
+            for (var i = 0; i < packages.Length; i++)
+                bound += Math.Max(0, value[i] - perKg * packages[i].WeightKg - perM3 * packages[i].VolumeM3);
             return bound;
         }
 

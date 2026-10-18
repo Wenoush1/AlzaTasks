@@ -71,6 +71,38 @@ public class LoadPlannerTests
 
         Assert.Equal([0, LoadPlan.NotLoaded], plan.TruckOfPackage);
     }
+    
+    [Fact]
+    public void WaitingPackageGainsPriority()
+    {
+        var fleet = new Fleet([new TruckCapacity(MaxWeightKg: 10, MaxVolumeM3: 1)]);
+        Package[] packages =
+        [
+            new(Id: 0, WeightKg: 8, VolumeM3: 0.1, Profit: 100),
+            new(Id: 1, WeightKg: 8, VolumeM3: 0.1, Profit: 80, WaitingTrips: 1),
+        ];
+
+        var plan = new LoadPlanner(fleet).Plan(packages);
+
+        Assert.Equal([LoadPlan.NotLoaded, 0], plan.TruckOfPackage);
+    }
+    
+    [Fact]
+    public void OverduePackageGoesFirst()
+    {
+        var fleet = new Fleet([new TruckCapacity(MaxWeightKg: 10, MaxVolumeM3: 1)]);
+        var limit = WaitingPolicy.Default.MaxWaitingTrips!.Value;
+        Package[] packages =
+        [
+            new(Id: 0, WeightKg: 8, VolumeM3: 0.1, Profit: 1_000),
+            new(Id: 1, WeightKg: 8, VolumeM3: 0.1, Profit: 1, WaitingTrips: limit),
+        ];
+
+        var plan = new LoadPlanner(fleet).Plan(packages);
+
+        Assert.Equal([LoadPlan.NotLoaded, 0], plan.TruckOfPackage);
+        Assert.Equal(0, plan.OverdueLeftBehind);
+    }
 
     [Fact]
     public void LightDay_EverythingIsLoaded()
@@ -103,7 +135,7 @@ public class LoadPlannerTests
         var loaded = Enumerable.Range(0, packages.Length).Where(i => plan.TruckOfPackage[i] != LoadPlan.NotLoaded).ToArray();
         Assert.Equal(loaded.Length, plan.LoadedCount);
         Assert.Equal(loaded.Sum(i => packages[i].Profit), plan.TotalProfit, precision: 3);
-        Assert.True(plan.TotalProfit <= plan.UpperBound, $"profit {plan.TotalProfit:N0} above the bound {plan.UpperBound:N0}");
+        Assert.True(plan.Value <= plan.UpperBound, $"value {plan.Value:N0} above the bound {plan.UpperBound:N0}");
         Assert.True(plan.OptimalityGap <= 0.0001, $"{plan.OptimalityGap:P4} below the upper bound");   // at most 0.01 %
     }
     
