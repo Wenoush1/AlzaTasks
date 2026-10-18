@@ -12,4 +12,7 @@ public sealed class LoadPlan
 
     public double TotalProfit => Trucks.Sum(t => t.Profit);
     public int LoadedCount => Trucks.Sum(t => t.PackageCount);
+
+    /// <summary>How far (relatively) the plan can at most be from the best possible one.</summary>
+    public double OptimalityGap => UpperBound > 0 ? Math.Max(0, 1 - TotalProfit / UpperBound) : 0;
 }

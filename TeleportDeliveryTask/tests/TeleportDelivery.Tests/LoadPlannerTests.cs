@@ -86,7 +86,7 @@ public class LoadPlannerTests
     [InlineData(ScenarioType.Typical)]
     [InlineData(ScenarioType.Heavy)]
     [InlineData(ScenarioType.Mixed)]
-    public void BusyDay_NoTruckIsOverloaded(ScenarioType scenarioType)
+    public void BusyDay_PlanIsValidAndNearOptimal(ScenarioType scenarioType)
     {
         var packages = PackageGenerator.Generate(300_000, scenarioType, seed: 1);
 
@@ -104,6 +104,7 @@ public class LoadPlannerTests
         Assert.Equal(loaded.Length, plan.LoadedCount);
         Assert.Equal(loaded.Sum(i => packages[i].Profit), plan.TotalProfit, precision: 3);
         Assert.True(plan.TotalProfit <= plan.UpperBound, $"profit {plan.TotalProfit:N0} above the bound {plan.UpperBound:N0}");
+        Assert.True(plan.OptimalityGap <= 0.0001, $"{plan.OptimalityGap:P4} below the upper bound");   // at most 0.01 %
     }
     
     [Theory]

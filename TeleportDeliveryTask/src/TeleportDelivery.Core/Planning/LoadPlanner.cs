@@ -4,10 +4,13 @@ using TeleportDelivery.Pricing;
 namespace TeleportDelivery.Planning;
 
 /// <summary>
-/// Plans one trip of the fleet: which packages go and in which truck. A greedy heuristic: packages are
-/// ranked by profit per share of fleet capacity they take and loaded in that order.
-/// Packages that fit nowhere are skipped; smaller ones later fill the gaps. The plan also carries an upper
-/// bound on the profit of any plan (<see cref="CapacityPricing"/>), so its quality can be judged.
+/// Plans one trip of the fleet: which packages go and in which truck, so that the profit is maximal.
+/// <list type="number">
+///   <item>Price the capacity: shadow prices of 1 kg and 1 m³ from the LP relaxation (<see cref="CapacityPricing"/>).</item>
+///   <item>Rank packages by efficiency = profit / capacity cost</item>
+///   <item>Load greedily in that order; each package goes to the truck in which weight and volume stay
+///         the most balanced. Packages that fit nowhere are skipped; smaller ones later fill the gaps.</item>
+/// </list>
 /// </summary>
 public sealed class LoadPlanner(Fleet fleet)
 {
@@ -16,7 +19,8 @@ public sealed class LoadPlanner(Fleet fleet)
 
     public LoadPlan Plan(Package[] packages)
     {
-        var order = Rank(packages);
+        var prices = CapacityPricing.Solve(packages, fleet.TotalWeightKg, fleet.TotalVolumeM3);
+        var order = Rank(packages, prices);
 
         var trucks = new Truck[fleet.Trucks.Count];
         for (var t = 0; t < trucks.Length; t++)
@@ -26,26 +30,23 @@ public sealed class LoadPlanner(Fleet fleet)
         Array.Fill(truckOf, LoadPlan.NotLoaded);
         FillTrucks(packages, order, trucks, truckOf);
 
-        var prices = CapacityPricing.Solve(packages, fleet.TotalWeightKg, fleet.TotalVolumeM3);
         return new LoadPlan { TruckOfPackage = truckOf, Trucks = trucks, UpperBound = prices.UpperBound };
     }
 
-    /// <summary>
-    /// Package indices, the most profitable per capacity first. A package's capacity share is
-    /// kg / fleet kg + m³ / fleet m³, so both dimensions count, weighted 1:1.
-    /// </summary>
-    private int[] Rank(Package[] packages)
+    /// <summary>Package indices by efficiency, the best first.</summary>
+    private int[] Rank(Package[] packages, CapacityPrices prices)
     {
-        var perFleetWeight = 1 / fleet.TotalWeightKg;
-        var perFleetVolume = 1 / fleet.TotalVolumeM3;
+        // On light days no capacity is scarce, so both prices are 0 and everything fits.
+        // Then just value capacity by its share of the fleet, which still gives a sensible order.
+        if (prices is { PerKg: 0, PerM3: 0 })
+            prices = prices with { PerKg = 1 / fleet.TotalWeightKg, PerM3 = 1 / fleet.TotalVolumeM3 };
 
         var order = new int[packages.Length];
         var sortKey = new double[packages.Length];
         for (var i = 0; i < packages.Length; i++)
         {
             order[i] = i;
-            var capacityShare = packages[i].WeightKg * perFleetWeight + packages[i].VolumeM3 * perFleetVolume;
-            sortKey[i] = -packages[i].Profit / capacityShare;   // minus: descending order
+            sortKey[i] = -packages[i].Profit / prices.CapacityCost(packages[i]);   // minus: descending order
         }
         Array.Sort(sortKey, order);
         return order;

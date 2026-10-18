@@ -1,3 +1,5 @@
+using TeleportDelivery.Model;
+
 namespace TeleportDelivery.Pricing;
 
 /// <summary>
@@ -7,4 +9,8 @@ namespace TeleportDelivery.Pricing;
 /// <param name="PerKg">Value of 1 kg of capacity in CZK (0 when weight is not a bottleneck).</param>
 /// <param name="PerM3">Value of 1 m³ of capacity in CZK (0 when volume is not a bottleneck).</param>
 /// <param name="UpperBound">Profit that no loading plan can exceed (CZK).</param>
-public readonly record struct CapacityPrices(double PerKg, double PerM3, double UpperBound);
+public readonly record struct CapacityPrices(double PerKg, double PerM3, double UpperBound)
+{
+    /// <summary>The capacity a package takes up, valued in CZK.</summary>
+    public double CapacityCost(in Package p) => PerKg * p.WeightKg + PerM3 * p.VolumeM3;
+}
