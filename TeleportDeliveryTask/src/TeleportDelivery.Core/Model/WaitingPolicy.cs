@@ -16,6 +16,9 @@ public sealed record WaitingPolicy(double DelayCostPerTrip, int? MaxWaitingTrips
     /// </summary>
     public static WaitingPolicy Default { get; } = new(DelayCostPerTrip: 50, MaxWaitingTrips: 4);
 
+    /// <summary>Each trip in isolation, as literally stated in the assignment (for comparison).</summary>
+    public static WaitingPolicy ProfitOnly { get; } = new(DelayCostPerTrip: 0, MaxWaitingTrips: null);
+
     /// <summary>What loading the package on this trip is worth: its profit plus the delay cost it stops.</summary>
     public double Value(in Package p) => p.Profit + DelayCostPerTrip * p.WaitingTrips;
 
