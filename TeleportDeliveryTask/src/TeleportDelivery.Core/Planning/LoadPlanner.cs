@@ -3,12 +3,15 @@ using TeleportDelivery.Model;
 namespace TeleportDelivery.Planning;
 
 /// <summary>
-/// Plans one trip of the fleet: which packages go and in which truck. A first, naive greedy version:
-/// the most profitable packages are loaded first, each into the first truck with enough room. Packages
-/// that fit nowhere are skipped; smaller ones later fill the gaps.
+/// Plans one trip of the fleet: which packages go and in which truck. A greedy heuristic: packages are
+/// ranked by profit per share of fleet capacity they take and loaded in that order.
+/// Packages that fit nowhere are skipped; smaller ones later fill the gaps.
 /// </summary>
 public sealed class LoadPlanner(Fleet fleet)
 {
+    private readonly double[] _perTruckWeight = [.. fleet.Trucks.Select(t => 1 / t.MaxWeightKg)];
+    private readonly double[] _perTruckVolume = [.. fleet.Trucks.Select(t => 1 / t.MaxVolumeM3)];
+
     public LoadPlan Plan(Package[] packages)
     {
         var order = Rank(packages);
@@ -24,37 +27,109 @@ public sealed class LoadPlanner(Fleet fleet)
         return new LoadPlan { TruckOfPackage = truckOf, Trucks = trucks };
     }
 
-    /// <summary>Package indices, the most profitable first.</summary>
-    private static int[] Rank(Package[] packages)
+    /// <summary>
+    /// Package indices, the most profitable per capacity first. A package's capacity share is
+    /// kg / fleet kg + m³ / fleet m³, so both dimensions count, weighted 1:1.
+    /// </summary>
+    private int[] Rank(Package[] packages)
     {
+        var perFleetWeight = 1 / fleet.TotalWeightKg;
+        var perFleetVolume = 1 / fleet.TotalVolumeM3;
+
         var order = new int[packages.Length];
         var sortKey = new double[packages.Length];
         for (var i = 0; i < packages.Length; i++)
         {
             order[i] = i;
-            sortKey[i] = -packages[i].Profit;
+            var capacityShare = packages[i].WeightKg * perFleetWeight + packages[i].VolumeM3 * perFleetVolume;
+            sortKey[i] = -packages[i].Profit / capacityShare;   // minus: descending order
         }
         Array.Sort(sortKey, order);
         return order;
     }
-    
-    private static void FillTrucks(Package[] packages, int[] order, Truck[] trucks, int[] truckOf)
+
+    /// <summary>Loads packages in the given order; a package that fits in no truck stays in the warehouse.</summary>
+    private void FillTrucks(Package[] packages, int[] order, Truck[] trucks, int[] truckOf)
     {
+        // Once trucks are nearly full, most packages fit nowhere. The skyline rejects those in O(log trucks)
+        // instead of scanning all trucks. It is rebuilt only when it let through a package that then
+        // fitted nowhere: trucks only fill up, so an older skyline still never rejects a package that fits.
+        var skyline = new FreeCapacitySkyline(trucks);
+
         foreach (var i in order)
         {
             ref readonly Package package = ref packages[i];
-            var truck = FirstFittingTruck(trucks, package);
-            if (truck == LoadPlan.NotLoaded) continue;
+            if (!skyline.MayFit(package)) continue;
 
+            var truck = MostBalancedTruck(trucks, package);
+            if (truck == LoadPlan.NotLoaded)
+            {
+                skyline = new FreeCapacitySkyline(trucks);
+                continue;
+            }
             trucks[truck].Add(package);
             truckOf[i] = truck;
         }
     }
 
-    private static int FirstFittingTruck(Truck[] trucks, in Package package)
+    /// <summary>
+    /// The truck whose tighter dimension stays the most free after loading (max-min of the free weight
+    /// and volume fractions). Heavy packages thus go where kilograms are left and bulky ones where
+    /// space is left, so each truck runs out of both at once, instead of one truck being full by weight
+    /// with half of its space empty. With one binding limit this is simply "the emptiest truck".
+    /// </summary>
+    private int MostBalancedTruck(Truck[] trucks, in Package package)
     {
+        var bestTruck = LoadPlan.NotLoaded;
+        var bestSlack = double.NegativeInfinity;   // free share of the tighter dimension in bestTruck
         for (var t = 0; t < trucks.Length; t++)
-            if (trucks[t].Fits(package)) return t;
-        return LoadPlan.NotLoaded;
+        {
+            double weightLeft = trucks[t].FreeWeightKg - package.WeightKg;
+            double volumeLeft = trucks[t].FreeVolumeM3 - package.VolumeM3;
+            if (weightLeft < 0 || volumeLeft < 0) continue;   // does not fit
+
+            double slack = Math.Min(weightLeft * _perTruckWeight[t], volumeLeft * _perTruckVolume[t]);
+            if (slack > bestSlack) (bestTruck, bestSlack) = (t, slack);
+        }
+        return bestTruck;
+    }
+    
+    /// <summary>
+    /// Pareto front of free capacity over all trucks: for each free weight, the most free volume in a truck
+    /// with at least that much weight left. A package fits in some truck only if a point here covers it.
+    /// </summary>
+    private sealed class FreeCapacitySkyline
+    {
+        // Sorted by free weight descending; free volume strictly ascending (dominated trucks are dropped).
+        private readonly List<(double FreeWeightKg, double FreeVolumeM3)> _points = [];
+
+        public FreeCapacitySkyline(Truck[] trucks)
+        {
+            foreach (var truck in trucks.OrderByDescending(t => t.FreeWeightKg))
+                if (_points.Count == 0 || truck.FreeVolumeM3 > _points[^1].FreeVolumeM3)
+                    _points.Add((truck.FreeWeightKg, truck.FreeVolumeM3));
+        }
+
+        public bool MayFit(in Package package)
+        {
+            var withEnoughWeight = CountWithFreeWeightAtLeast(package.WeightKg);
+            return withEnoughWeight > 0 && _points[withEnoughWeight - 1].FreeVolumeM3 >= package.VolumeM3;
+        }
+
+        /// <summary>
+        /// Points are sorted by free weight descending, so those with at least <paramref name="weightKg"/>
+        /// free form a prefix of the list. Binary search for its length.
+        /// </summary>
+        private int CountWithFreeWeightAtLeast(double weightKg)
+        {
+            int lo = 0, hi = _points.Count;
+            while (lo < hi)
+            {
+                var mid = (lo + hi) / 2;
+                if (_points[mid].FreeWeightKg >= weightKg) lo = mid + 1;
+                else hi = mid;
+            }
+            return lo;
+        }
     }
 }

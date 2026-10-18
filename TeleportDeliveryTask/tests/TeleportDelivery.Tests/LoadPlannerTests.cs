@@ -4,25 +4,41 @@ using TeleportDelivery.Planning;
 
 namespace TeleportDelivery.Tests;
 
-/// <summary>The naive greedy planner: most profitable first, into the first truck that fits.</summary>
+/// <summary>The greedy planner: most profitable per capacity first, into the most balanced truck.</summary>
 public class LoadPlannerTests
 {
     [Fact]
-    public void MostProfitablePackagesGoFirst()
+    public void MostProfitablePerCapacityGoFirst()
     {
-        var fleet = new Fleet([new TruckCapacity(MaxWeightKg: 10, MaxVolumeM3: 1)]);
+        var fleet = new Fleet([new TruckCapacity(MaxWeightKg: 10, MaxVolumeM3: 10)]);
         Package[] packages =
         [
-            new(Id: 0, WeightKg: 6, VolumeM3: 0.1, Profit: 50),
-            new(Id: 1, WeightKg: 6, VolumeM3: 0.1, Profit: 100),
-            new(Id: 2, WeightKg: 4, VolumeM3: 0.1, Profit: 10),
+            new(Id: 0, WeightKg: 8, VolumeM3: 0.1, Profit: 90),
+            new(Id: 1, WeightKg: 5, VolumeM3: 1, Profit: 70),
+            new(Id: 2, WeightKg: 5, VolumeM3: 1, Profit: 70),
         ];
 
         var plan = new LoadPlanner(fleet).Plan(packages);
 
-        // Only one of the 6 kg packages fits: the more profitable one. The small one fills the gap.
+        // The 8 kg package is the most profitable, but the two 5 kg ones earn more per kilogram used.
         Assert.Equal([LoadPlan.NotLoaded, 0, 0], plan.TruckOfPackage);
-        Assert.Equal(110, plan.TotalProfit);
+        Assert.Equal(140, plan.TotalProfit);
+    }
+
+    [Fact]
+    public void BulkyPackageGoesWhereSpaceIsLeft()
+    {
+        var fleet = new Fleet([new TruckCapacity(10, 1), new TruckCapacity(10, 1)]);
+        Package[] packages =
+        [
+            new(Id: 0, WeightKg: 8, VolumeM3: 0.1, Profit: 100),
+            new(Id: 1, WeightKg: 1, VolumeM3: 0.8, Profit: 90),
+        ];
+
+        var plan = new LoadPlanner(fleet).Plan(packages);
+
+        // Both fit in truck 0, but there it would be left with almost no room in either dimension.
+        Assert.Equal([0, 1], plan.TruckOfPackage);
     }
 
     [Fact]
@@ -87,5 +103,23 @@ public class LoadPlannerTests
         var loaded = Enumerable.Range(0, packages.Length).Where(i => plan.TruckOfPackage[i] != LoadPlan.NotLoaded).ToArray();
         Assert.Equal(loaded.Length, plan.LoadedCount);
         Assert.Equal(loaded.Sum(i => packages[i].Profit), plan.TotalProfit, precision: 3);
+    }
+    
+    [Theory]
+    [InlineData(ScenarioType.Typical)]
+    [InlineData(ScenarioType.Heavy)]
+    [InlineData(ScenarioType.Mixed)]
+    public void BusyDay_NoSkippedPackageFitsAnywhere(ScenarioType scenarioType)
+    {
+        var packages = PackageGenerator.Generate(300_000, scenarioType, seed: 1);
+
+        var plan = new LoadPlanner(Fleet.Default).Plan(packages);
+
+        for (var i = 0; i < packages.Length; i++)
+        {
+            if (plan.TruckOfPackage[i] != LoadPlan.NotLoaded) continue;
+            var package = packages[i];
+            Assert.DoesNotContain(plan.Trucks, truck => truck.Fits(package));
+        }
     }
 }
